@@ -4,6 +4,7 @@ from scipy.io import wavfile
 from pathlib import Path
 import shutil
 import subprocess
+from src.decay_cache import DecayArray, Frame
 
 TEMP_DIR = Path('temp')
 
@@ -89,14 +90,14 @@ def get_duration(path):
             text=True
         ).stdout
 
-def get_framecount(path):
+def get_framecount_fast(path):
     return subprocess.run(
             [
                 'ffprobe',
                 '-v', 'error',
                 '-select_streams', 'v:0',
-                '-count_frames',
-                '-show_entries', 'stream=nb_read_frames',
+                '-count_packets',
+                '-show_entries', 'stream=nb_read_packets',
                 '-print_format', 'csv=p=0',
                 path
             ],
@@ -105,19 +106,22 @@ def get_framecount(path):
             text=True
         ).stdout
 
-def build_output_video(frames_dir, outframes_dir, best_matches, framerate, output_path):
+
+def lerp(a: float, b: float, t: float) -> float:
+    return (1 - t) * a + t * b
+
+def build_output_video(carrier_path, framecount: int, best_matches, framerate, output_path):
     print("building output video")
-        
-    for i, match_num in enumerate(best_matches):
-        shutil.copy(frames_dir / f'{match_num+1:08d}.png', outframes_dir / f'{i:08d}.png')
-    subprocess.run(
+    
+    proc = subprocess.Popen(
         [
             'ffmpeg',
             '-hide_banner',
             '-loglevel', 'error',
             '-y',
             '-framerate', str(framerate),
-            '-i', outframes_dir / '%08d.jpeg',
+            '-f', 'image2pipe',
+            '-i', 'pipe:',
             '-i', TEMP_DIR / 'out.wav',
             '-c:a', 'aac',
             '-shortest',
@@ -125,8 +129,58 @@ def build_output_video(frames_dir, outframes_dir, best_matches, framerate, outpu
             '-pix_fmt', 'yuv420p',
             output_path
         ],
-        check=True
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL
     )
+
+    d = DecayArray(int(framecount))
+
+    import time
+    delta = time.perf_counter()
+    counter = 0
+    counted = 0
+    for i, match_id in enumerate(best_matches):
+        d.process()
+        ffinput = ""
+        if d.item_usable(match_id):
+            d.reset_timer(match_id)
+        else:
+            min_f = match_id
+            max_f = int(min(match_id+100,framecount))
+            for idx in range(min_f,max_f):
+                if d.item_usable(idx):
+                    max_f = idx
+                    break
+            
+            f = get_video_frames_mem(
+                carrier_path,
+                1/framerate,
+                min_f,
+                max_f
+            )
+            prerange = range(min_f, max_f)
+            d.clear_requested(prerange)
+            for idx in prerange:
+                d.set_frame(get_frame(f,idx-min_f),idx)
+        
+        counter += 1
+
+        good_frames_str = str(len(d.array.keys())-d.bad_frames) + "/" + str(len(d.array.keys())) + " cached frames"
+
+        print(str(i+1)+"/"+str(len(best_matches)), str(int(counted)) + "fps |", good_frames_str,end="     \r")
+        ffinput = d.array[match_id].frame
+
+        proc.stdin.write(ffinput)
+        nd = time.perf_counter()
+        
+        counted = lerp(counted,counter/0.5,0.05)
+        if (nd-delta) > 0.5:
+            delta = nd
+            counter = 0
+    
+
+
+    return
 
 def create_output_audio(best_matches, modulator_audio, carrier_frames, modulator_frames, samples_per_frame):
     output_audio = np.zeros(modulator_audio.shape, dtype=float)
@@ -146,27 +200,23 @@ def create_output_audio(best_matches, modulator_audio, carrier_frames, modulator
 
     wavfile.write(TEMP_DIR / 'out.wav', INTERNAL_SAMPLERATE, output_audio)
 
-def separate_video_frames_disk(path):
-    frames_dir = TEMP_DIR / 'frames'
-    frames_dir.mkdir()
-    subprocess.run(
-        [
-            'ffmpeg',
-            '-loglevel', 'error',
-            '-i', path,
-            frames_dir / '%08d.jpg'
-        ],
-        check=True
-    )
-    return frames_dir
+def get_video_frames_mem(
+        path: str,
+        frame_length: float,
+        start_frame: int,
+        end_frame: int
+        ):
+    
+    start_time = start_frame * frame_length
 
-def separate_video_frames_mem(path):
     x = subprocess.check_output(
         [
             'ffmpeg',
             '-loglevel', 'error',
-            '-i', path, '-c:v', 'png', 
-            '-t', '4',
+            '-ss', str(start_time),
+            '-i', path, '-c:v', 'png',
+            '-pix_fmt', 'pal8',
+            '-frames:v', str(end_frame-start_frame),
             '-f', 'image2pipe',
             '-'
         ]
@@ -176,7 +226,7 @@ def separate_video_frames_mem(path):
 PNG_MAGIC = int("89504e47",16).to_bytes(4,byteorder='big')
 JPG_MAGIC = int("ffd8ffe0",16).to_bytes(4,byteorder='big')
 def split_frames(frames: bytes):
-    print(frames.index(PNG_MAGIC))
+    # print(frames.index(PNG_MAGIC))
     indices = []
     cur = 0
     while True:
@@ -194,7 +244,7 @@ def split_frames(frames: bytes):
 
         f = frames[f_start:f_end]
         new_frames.append(f)
-    print(indices)
+    # print(indices)
     return new_frames
 
 def get_frame_ofs_index(frames: bytes, index):
@@ -208,9 +258,17 @@ def get_frame_ofs_index(frames: bytes, index):
         if idx > cur: total_idx += 1
         if total_idx == index:
             break
-        cur = max(cur,idx)
+        cur = max(cur,idx+1)
 
     return idx
+
+def get_frame(frames: bytes, index: int):
+    start = get_frame_ofs_index(frames,index)
+    end = get_frame_ofs_index(frames,index+1)
+    if start == end:
+        end = len(frames)
+
+    return frames[start:end]
 
 def write_frames(frames: list[bytes]):
     for i, n in enumerate(frames):
@@ -231,17 +289,11 @@ def process(carrier_path, modulator_path, output_path):
 
     if 'video' in carrier_type:
         carrier_is_video = True
-        # carrier_duration = float(get_duration(carrier_path))
-        # carrier_framecount = float(get_framecount(carrier_path))
-        # frame_length = carrier_duration / carrier_framecount      
-        print("Extracting video frames (this may take a while)")
-        frames = separate_video_frames_mem(carrier_path)
+        carrier_duration = float(get_duration(carrier_path))
+        carrier_framecount = float(get_framecount_fast(carrier_path))
         
-        print("Splitting frames f")
-        new_frames = split_frames(frames)
-        print(len(new_frames))
-        print(get_frame_ofs_index(frames,100))
-        print("done")
+        frame_length = carrier_duration / carrier_framecount      
+        
     elif 'audio' in carrier_type:
         carrier_is_video = False
         frame_length = DEFAULT_FRAME_LENGTH
@@ -300,9 +352,7 @@ def process(carrier_path, modulator_path, output_path):
     
 
     if carrier_is_video:
-        outframes_dir = TEMP_DIR / 'outframes'
-        outframes_dir.mkdir()
-        build_output_video(frames, outframes_dir, best_matches, 1/frame_length, output_path)
+        build_output_video(carrier_path, carrier_framecount, best_matches, 1/frame_length, output_path)
     else:
         subprocess.run(
             [
