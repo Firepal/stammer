@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from argparse import ArgumentParser
+import argparse
 from typing import List
 import numpy as np
 from scipy.io import wavfile
@@ -157,7 +157,7 @@ def build_output_video(video_handler: VideoHandler, matcher):
     video_handler.complete()
 
 def is_audio_filename(name):
-    return Path(name).suffixes[0][1:] in COMMON_AUDIO_EXTS
+    return Path(name).suffix[1:] in COMMON_AUDIO_EXTS
 
 def get_audio_as_wav_bytes(path):
     ff_out = bytearray(subprocess.check_output(
@@ -180,7 +180,19 @@ def get_audio_as_wav_bytes(path):
 
     return io.BytesIO(bytes(ff_out))
 
-def process(carrier_path, modulator_path, output_path, custom_frame_length, matcher_mode, video_mode, color_mode, min_cached_frames):
+def process(
+        carrier_path, 
+        modulator_path, 
+        output_path,
+        custom_frame_length = None,
+        matcher_mode = "basic",
+        video_mode = "disk",
+        color_mode = "full", 
+        min_cached_frames = 2):
+    global TEMP_DIR
+    tempdir = tempfile.TemporaryDirectory()
+    TEMP_DIR = Path(tempdir.name)
+
     if not carrier_path.is_file():
         raise FileNotFoundError(f"Carrier file {carrier_path} not found.")
     if not modulator_path.is_file():
@@ -260,7 +272,6 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
             handler.set_min_cached_frames(min_cached_frames)
         elif video_mode == "disk":
             handler = VideoHandlerDisk(carrier_path,output_path,TEMP_DIR,matcher,carrier_framecount,video_frame_length,color_mode)
-
         build_output_video(handler, matcher)
     else:
         subprocess.run(
@@ -272,6 +283,8 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
             ],
             check=True
         )
+    
+    tempdir.cleanup()
 
 def main():
     logging.basicConfig(format='%(message)s', level=logging.INFO)
@@ -280,7 +293,7 @@ def main():
     test_command(['ffmpeg', '-version'])
     test_command(['ffprobe', '-version'])
 
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.add_argument('carrier_path', type=Path, metavar='carrier_track', help='path to an audio or video file that frames will be taken from')
     parser.add_argument('modulator_path', type=Path, metavar='modulator_track', help='path to an audio or video file that will be reconstructed using the carrier track')
     parser.add_argument('output_path', type=Path, metavar='output_file', help='path to file that will be written to; should have an audio or video file extension (such as .wav, .mp3, .mp4, etc.)')

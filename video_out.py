@@ -3,6 +3,7 @@ from decay_cache import DecayCache
 from audio_matching import AudioMatcher
 import subprocess
 import io
+import sys
 
 def apply_color_mode(ffmpeg_call,color_mode):
     color_strs = []
@@ -191,7 +192,7 @@ class VideoHandlerMem(VideoHandler):
         start_time = start_frame * self.frame_length
         call = apply_color_mode([
                 'ffmpeg',
-                '-loglevel', 'error',
+                '-v', 'error',
                 '-ss', str(start_time),
                 '-i', self.carrier_path, '-c:v', 'png',
                 'include_color_mode',
@@ -200,7 +201,17 @@ class VideoHandlerMem(VideoHandler):
                 '-'
             ],self.color_mode)
         
-        return subprocess.check_output(call)
+        output = subprocess.Popen(
+            call,
+            env={"AV_LOG_FORCE_COLOR": ""},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+
+        
+        stdout, stderr = output.communicate()
+        
+        return stdout
     
     def __get_frame_ofs_index(frames: bytes, index):
         cur = 0
@@ -269,7 +280,9 @@ class VideoHandlerMem(VideoHandler):
         super().write_frame()
         frame.seek(0)
         f = frame.read()
+
         self.out_proc.stdin.write(f)
+
 
     def get_progress_strings(self):
         strs = super().get_progress_strings()
