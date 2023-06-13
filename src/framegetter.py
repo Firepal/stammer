@@ -1,5 +1,5 @@
 from pathlib import Path
-from decay_cache import DecayCache
+from src.decay_cache import DecayCache
 import subprocess
 import io
 
@@ -12,6 +12,8 @@ def apply_color_mode(ffmpeg_call,color_mode):
         color_strs = ['-vf', 'split[s0][s1];[s0]palettegen=256:0:stats_mode=single[p];[s1][p]paletteuse=new=1:dither=bayer']
 
     idx = ffmpeg_call.index('include_color_mode')
+    if idx == -1:
+        return ffmpeg_call
     ffmpeg_call.pop(idx)
     if color_mode != "full":
         for i, s in enumerate(color_strs):
@@ -41,35 +43,45 @@ class FrameGetter:
             print(f"STAMMER just tried to use carrier frame {idx}")
             print(f"but carrier only has {self.framecount} frames.")
             print()
-            print("This is a critical known issue with how carrier frames are handled.")
-            print("Please report STAMMER's output at this link:\nhttps://github.com/ArdenButterfield/stammer/issues/62")
+            print("This should not happen.")
             print("\nQuitting.")
             quit()
 
     def complete(self):
         print(end="\n")
+    
+    def get_input_command(self, pre = [], post = []):
+        call = [
+                'ffmpeg',
+                '-loglevel', 'error',
+                'pre',
+                '-i', self.carrier_path,
+                '-c:v', 'mjpeg',
+                'post'
+        ]
+        
+        pairs = [('pre',pre),('post',post)]
+        for pair_id, pair_val in pairs:
+            idx = call.index(pair_id)
+            if idx == -1: continue
+            call.pop(idx)
+            for i, v in enumerate(pair_val):
+                call.insert(idx+i,v)
+        return call
 
 # TODO: 
-# - It should write frames itself
-# - Maybe have a decaying disk cache
+# - Maybe have a decaying disk cache so we don't have to write all frames
 class FrameGetterDisk(FrameGetter):
     def __init__(self, *args):
         super().__init__(*args)
         self.separate_frames()
 
-    
     def separate_frames(self):
         print("Separating video frames")
         frames_dir = self.temp_dir / 'frames'
         frames_dir.mkdir(exist_ok=True)
 
-        call = apply_color_mode([
-                'ffmpeg',
-                '-v', 'quiet', '-stats',
-                '-i', str(self.carrier_path),
-                'include_color_mode',
-                str(frames_dir / 'frame%06d.png')
-        ],self.color_mode)
+        call = self.get_input_command(pre=['-stats'],post=['-b:v', '4M', str(frames_dir / 'frame%06d.jpg')])
         
         subprocess.run(call,check=True)
     
@@ -78,7 +90,7 @@ class FrameGetterDisk(FrameGetter):
         
         # Video frame filenames start at 1, not 0
         idx += 1
-        return open(self.frames_dir / f"frame{idx:06d}.png", 'rb')
+        return open(self.frames_dir / f"frame{idx:06d}.jpg", 'rb')
 
     def complete(self):
         pass
@@ -86,6 +98,7 @@ class FrameGetterDisk(FrameGetter):
 
 PNG_MAGIC = int("89504e47",16).to_bytes(4,byteorder='big')
 JPG_MAGIC = int("ffd8ffe0",16).to_bytes(4,byteorder='big')
+# JXL_MAGIC = int("0000000C4A584C200D0A870A",16).to_bytes(4,byteorder='big')
 
 class FrameGetterMem(FrameGetter):
     def __init__(self, *args):
@@ -109,16 +122,11 @@ class FrameGetterMem(FrameGetter):
 
     def __get_video_frames_mem(self,start_frame: int,end_frame: int):
         start_time = start_frame * self.frame_length
-        call = apply_color_mode([
-                'ffmpeg',
-                '-loglevel', 'error',
-                '-ss', str(start_time),
-                '-i', self.carrier_path, '-c:v', 'png',
-                'include_color_mode',
-                '-frames:v', str(end_frame-start_frame),
-                '-f', 'image2pipe',
-                '-'
-            ],self.color_mode)
+        call = self.get_input_command(
+            pre=['-ss', str(start_time)],
+            post=['-frames:v', str(end_frame-start_frame),
+            '-f', 'image2pipe','-']
+        )
         
         return subprocess.check_output(call)
     

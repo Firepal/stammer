@@ -4,9 +4,8 @@ from scipy.optimize import linear_sum_assignment
 import logging
 from typing import List
 from PIL import Image
-import image_tiling
-import fraction_bits
 import io
+from src import image_tiling, fraction_bits
 from src.framegetter import FrameGetter
 from src.video_out import VideoOut
 
@@ -254,17 +253,17 @@ class CombinedFrameAudioMatcher(AudioMatcher):
         output_frame.save(img_bytes,format="PNG") 
         video_out.write_frame(img_bytes)
 
-    def process_video_frame(self, video_i: int, framegetter: FrameGetter, video_out: VideoOut):
+    def process_video_frame(self, video_i, framegetter: FrameGetter, video_out: VideoOut):
         audio_framelen = self.frame_length
         video_framelen = framegetter.frame_length
 
-        elapsed_time = video_i * video_framelen
-        audio_frame_i = int(elapsed_time / audio_framelen)
+        elapsed_time_vid = video_i * video_framelen
+        audio_frame_i = int(elapsed_time_vid / audio_framelen)
 
-        time_past_start_of_audio_frame = elapsed_time - (audio_frame_i * audio_framelen)
+        audio_frame_fraction = elapsed_time_vid - (audio_frame_i * audio_framelen)
 
         match_row = self.best_matches[audio_frame_i]
 
-        match_row = [int((i * audio_framelen + time_past_start_of_audio_frame)/video_framelen) for i in match_row]
+        match_row = [int((i * audio_framelen + audio_frame_fraction)/video_framelen) for i in match_row]
 
         CombinedFrameAudioMatcher.tesselate_composite(framegetter, video_out, match_row, self.basis_coefficients[audio_frame_i])

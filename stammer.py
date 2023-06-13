@@ -98,47 +98,11 @@ def get_framecount(path):
 
 def build_output_video(framegetter: FrameGetter, matcher: AudioMatcher):
     logging.info("building output video")
-    
-    # def tesselate_composite(match_row, basis_coefficients, i):
-    #     tiles: List[Image.Image] = []
-    #     bits: List[List[int]] = []
-    #     used_coeffs = [(j, coefficient) for j, coefficient in enumerate(basis_coefficients) if coefficient != 0]
-    #     for k, coeff in used_coeffs:
-    #         frame_num = min(match_row[k], video_handler.framecount - 1)
-    #         tiles.append(Image.open(video_handler.get_frame(frame_num)))
-    #         hot_bits,_ = fraction_bits.as_array(coeff)
-    #         bits.append(hot_bits)
-    #     tesselation = image_tiling.Tiling(height=tiles[0].height,width=tiles[0].width)
-    #     output_frame = Image.new('RGB',(tiles[0].width, tiles[0].height))
-    #     for m in np.arange(1,MAX_TESSELLATION_COUNT):
-    #         first_hot = next(((offset, x) for offset, x in enumerate(bits) if x[m]), None)
-    #         if first_hot is not None:
-    #             do_tile = tesselation.needs_tiling
-    #             tb = tiles[first_hot[0]].copy()
-    #             x0, y0, w, h = tesselation.get_image_placement()
-    #             tb.thumbnail((w,h))
-    #             output_frame.paste(tb, (x0,y0))
-    #             if do_tile:
-    #                 output_frame.paste(tb,(x0, y0 + tb.height))
-        
-    #     img_bytes = io.BytesIO()
-    #     output_frame.save(img_bytes,format="PNG") 
-    #     video_handler.write_frame(i, img_bytes)
 
     video_out = VideoOut(framegetter.temp_dir,1.0/framegetter.frame_length,framegetter.output_path)
-
+    
     for video_frame_i in range(framegetter.best_match_count):
         matcher.process_video_frame(video_frame_i,framegetter,video_out)
-    
-    # elif type(matcher) == CombinedFrameAudioMatcher:
-    #     basis_coefficients = matcher.get_basis_coefficients()
-    #     for video_frame_i in range(video_handler.best_match_count):
-    #         elapsed_time = video_frame_i * video_frame_length
-    #         audio_frame_i = int(elapsed_time / audio_frame_length)
-    #         time_past_start_of_audio_frame = elapsed_time - (audio_frame_i * audio_frame_length)
-    #         match_row = best_matches[audio_frame_i]
-    #         match_row = [int((i * audio_frame_length + time_past_start_of_audio_frame)/video_frame_length) for i in match_row]
-    #         tesselate_composite(match_row, basis_coefficients[audio_frame_i], video_frame_i)
     
     # signals FrameGetterDisk to start encoding
     video_out.complete()
@@ -177,8 +141,6 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
     carrier_duration = float(get_duration(carrier_path))
     modulator_duration = float(get_duration(modulator_path))
 
-    video_in_mem = (video_mode == "mem_decay")
-
     if 'video' in carrier_type:
         output_is_audio = is_audio_filename(output_path)
         carrier_is_video = not output_is_audio
@@ -188,23 +150,6 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
         video_frame_length = carrier_duration / carrier_framecount
         
         frame_length = video_frame_length
-        
-
-        # if not output_is_audio and not video_in_mem:
-        #     logging.info("Separating video frames")
-        #     frames_dir = TEMP_DIR / 'frames'
-        #     frames_dir.mkdir()
-
-        #     call = framegetter.apply_color_mode([
-        #             'ffmpeg',
-        #             '-v', 'quiet', '-stats',
-        #             '-i', str(carrier_path),
-        #             'include_color_mode',
-        #             str(frames_dir / 'frame%06d.png')
-        #     ],color_mode)
-            
-
-        #     subprocess.run(call,check=True)
 
     elif 'audio' in carrier_type:
         carrier_is_video = False
