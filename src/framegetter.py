@@ -1,6 +1,5 @@
 from pathlib import Path
 from decay_cache import DecayCache
-from audio_matching import AudioMatcher
 import subprocess
 import io
 
@@ -19,8 +18,8 @@ def apply_color_mode(ffmpeg_call,color_mode):
             ffmpeg_call.insert(idx+i,s)
     return ffmpeg_call
 
-class VideoHandler:
-    def __init__(self, carrier_path: Path, output_path: Path, temp_dir: Path, matcher: AudioMatcher, framecount: int, frame_length: float, color_mode):
+class FrameGetter:
+    def __init__(self, carrier_path: Path, output_path: Path, temp_dir: Path, matcher, framecount: int, frame_length: float, color_mode):
         self.matcher = matcher
         self.best_match_count = int(len(matcher.get_best_matches()) * matcher.frame_length / frame_length)
 
@@ -33,9 +32,6 @@ class VideoHandler:
         self.frame_length = frame_length
 
         self.color_mode = color_mode
-
-        self.frames_written = 0
-        self.out_proc = self.create_output_proc()
     
     def get_frame(self,idx):
         try:
@@ -49,70 +45,33 @@ class VideoHandler:
             print("Please report STAMMER's output at this link:\nhttps://github.com/ArdenButterfield/stammer/issues/62")
             print("\nQuitting.")
             quit()
-    
-    def write_frame(self):
-        self.frames_written += 1
-        self.print_progress()
 
     def complete(self):
         print(end="\n")
 
-    def get_progress_strings(self) -> list[str]:
-        strings: list[str] = []
-        strings.append(str(self.frames_written) + "/" + str(self.best_match_count))
-        
-        return strings
-    
-    def progress_strings_separated(self):
-        ps = self.get_progress_strings()
-        if len(ps) == 1: return ps[0]
-        return " . ".join(self.get_progress_strings())
-    
-    def print_progress(self):
-        print(self.progress_strings_separated(),end='      \r')
-
-    def get_output_cmd(self,input = None):
-        if input == None:
-            input = [
-                '-f', 'image2pipe', '-i', 'pipe:',
-                '-i', str(self.temp_dir / 'out.wav')
-            ]
-        cmd = [
-            'ffmpeg',
-            '-v', 'quiet',
-            '-y',
-            '-framerate', str(1.0/self.frame_length),
-            '!inputs!',
-            '-c:a', 'aac',
-            '-c:v', 'libx264',
-            '-crf', '24',
-            '-pix_fmt', 'yuv420p',
-            '-shortest',
-            str(self.output_path)
-        ]
-
-        def replace(value, list):
-            idx = cmd.index(value)
-            cmd.pop(idx)
-            for i, x in enumerate(list): cmd.insert(idx+i,x)
-
-        replace('!inputs!',input)
-    
-        return cmd
-    
-    def create_output_proc(self):
-        call = self.get_output_cmd()
-
-        return subprocess.Popen(
-            call,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL
-        )
-
-
-class VideoHandlerDisk(VideoHandler):
+# TODO: 
+# - It should write frames itself
+# - Maybe have a decaying disk cache
+class FrameGetterDisk(FrameGetter):
     def __init__(self, *args):
         super().__init__(*args)
+        self.separate_frames()
+
+    
+    def separate_frames(self):
+        print("Separating video frames")
+        frames_dir = self.temp_dir / 'frames'
+        frames_dir.mkdir(exist_ok=True)
+
+        call = apply_color_mode([
+                'ffmpeg',
+                '-v', 'quiet', '-stats',
+                '-i', str(self.carrier_path),
+                'include_color_mode',
+                str(frames_dir / 'frame%06d.png')
+        ],self.color_mode)
+        
+        subprocess.run(call,check=True)
     
     def get_frame(self,idx):
         super().get_frame(idx)
@@ -121,21 +80,14 @@ class VideoHandlerDisk(VideoHandler):
         idx += 1
         return open(self.frames_dir / f"frame{idx:06d}.png", 'rb')
 
-    def write_frame(self,idx,frame: io.BytesIO):
-        super().write_frame()
-        frame.seek(0)
-        self.out_proc.stdin.write(frame.read())
-    
     def complete(self):
-        super().complete()
-
-        self.out_proc.communicate()
+        pass
 
 
 PNG_MAGIC = int("89504e47",16).to_bytes(4,byteorder='big')
 JPG_MAGIC = int("ffd8ffe0",16).to_bytes(4,byteorder='big')
 
-class VideoHandlerMem(VideoHandler):
+class FrameGetterMem(FrameGetter):
     def __init__(self, *args):
         super().__init__(*args)
         self.cache = DecayCache(self.framecount)
@@ -185,8 +137,8 @@ class VideoHandlerMem(VideoHandler):
         return idx
 
     def __get_frame_slice(frames: bytes, index: int):
-        start = VideoHandlerMem.__get_frame_ofs_index(frames,index)
-        end = VideoHandlerMem.__get_frame_ofs_index(frames,index+1)
+        start = FrameGetterMem.__get_frame_ofs_index(frames,index)
+        end = FrameGetterMem.__get_frame_ofs_index(frames,index+1)
         if start == end: end = len(frames)
 
         return frames[start:end]
@@ -208,7 +160,7 @@ class VideoHandlerMem(VideoHandler):
         new_frame_ids = range(min_f, max_f)
         self.cache.clear(new_frame_ids)
         for idx in new_frame_ids:
-            frame_slice = VideoHandlerMem.__get_frame_slice(decoded_frames,idx-min_f)
+            frame_slice = FrameGetterMem.__get_frame_slice(decoded_frames,idx-min_f)
             self.cache.set_item(idx,frame_slice)
     
     def get_frame(self,idx) -> io.BytesIO:
@@ -224,21 +176,12 @@ class VideoHandlerMem(VideoHandler):
         frame = self.cache.items[idx].item
         return io.BytesIO(frame)
 
-    def write_frame(self,idx,frame: io.BytesIO):
-        super().write_frame()
-        frame.seek(0)
-        f = frame.read()
-        self.out_proc.stdin.write(f)
-
-    def get_progress_strings(self):
-        strs = super().get_progress_strings()
-        strs.append(f"{self.cache_hits} cache hits")
-        strs.append(f"{self.framecount-self.cache.decayed_items}/{self.framecount} cached frames")
-        return strs
+    # def get_progress_strings(self):
+    #     strs = super().get_progress_strings()
+    #     strs.append(f"{self.cache_hits} cache hits")
+    #     strs.append(f"{self.framecount-self.cache.decayed_items}/{self.framecount} cached frames")
+    #     return strs
     
     
     def complete(self):
-        super().complete()
-
-        # properly close ffmpeg
-        self.out_proc.communicate()
+        pass
