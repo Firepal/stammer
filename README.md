@@ -4,12 +4,12 @@ If you re-arranged the frames of [Steamed Hams](https://www.youtube.com/watch?v=
 
 https://github.com/ArdenButterfield/stammer/assets/29317321/0f69d48b-5f99-4c8e-b9a2-8b4c83c1e19d
 
-STAMMER is a python utility for recreating any audio source with the frames of any other audio or video source.
-For each frame in the audio source being recreated, STAMMER selects the frame in the source audio with the most similar spectrum, adjusts its volume as needed, and inserts that frame into the output. Despite its name, STAMMER works on any audio, not just Steamed Hams.
+STAMMER is a Python utility for recreating any audio source with the frames of any other audio or video source.
+For each frame in the audio "modulator" being recreated, STAMMER selects the frame in the "carrier" audio with the most similar spectrum, adjusts its volume as needed, and inserts that frame into the output. Despite its name, STAMMER works on any audio, not just Steamed Hams.
 
 ## Instructions
 
-STAMMER requires python 3, and the following python libraries:
+STAMMER requires ffmpeg binaries, Python 3.12, and the following Python libraries:
 
 ```
 numpy
@@ -17,17 +17,20 @@ scipy
 Pillow
 ```
 
-These can be installed by running `pip install -r requirements.txt`.
+These can be installed by running `pip install -r requirements.txt`.<br>
+(If you do not have `pip`, try `python -m pip install -r requirements.txt`.
+On Linux, python-pip may be a separate package from python itself.)
 
-It also requires the command line utility `ffmpeg`.
-
-STAMMER can be run from the command line with the command
+STAMMER is run from a command prompt with the command
 
 ```sh
 python stammer.py <carrier track> <modulator track> <output file>
 ```
 
-where `<carrier track>` is the path to an audio or video file that frames will be taken from (i.e. Steamed Hams in the above example), `<modulator track>` is the path to an audio or video file that will be reconstructed using the carrier track, and `<output file>` is a path to file that will be written to. `<output file>` should have an audio or video file extension (such as `.wav`, `.mp3`, `.mp4`, etc).
+where:
+* `<carrier track>` is the path to an audio or video file that frames will be taken from (i.e. Steamed Hams in the above example), 
+* `<modulator track>` is the path to a media file with an audio track that will be reconstructed using the carrier track, 
+* `<output file>` is the path to the desired new output file. It should have an audio or video file extension (`.mp4`, `.wav`, `.mp3` etc.)
 
 ## Why and How
 
