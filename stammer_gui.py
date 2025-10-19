@@ -15,13 +15,17 @@ with open("requirements.txt","r") as modules:
             break
 
 if not has_modules:
-    print("Fetching Python required modules for STAMMER\n")
-    proc = subprocess.Popen(
-        ['pip','install','-r','requirements.txt']
-    )
-    proc.communicate()
-    if proc.returncode == 0:
-        print("Modules fetched.")
+    print("""Please run the following command:
+python -m pip install -r requirements.txt
+""")
+    quit()
+    # print("Fetching Python required modules for STAMMER\n")
+    # proc = subprocess.Popen(
+    #     ['pip','install','-r','requirements.txt']
+    # )
+    # proc.communicate()
+    # if proc.returncode == 0:
+    #     print("Modules fetched.")
 
 from gui_bits import StammerGUI
 
