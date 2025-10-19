@@ -36,6 +36,36 @@ class VideoHandler:
 
         self.frames_written = 0
         self.out_proc = self.create_output_proc()
+
+        self.output_frame_ranges = self._calculate_frame_ranges()
+
+    # Calculates a bunch of frame ranges we can tell ffmpeg to decode for us
+    # Getting frames in batches is better because you get less processes per actual used frame for mem_decay mode.
+    # spinning up a new ffmpeg process takes time and memory
+    def _calculate_frame_ranges(self):
+        sorted_unique_frames = sorted(list(set([i.item() for i in self.matcher.best_matches])))
+
+        start = end = sorted_unique_frames[0]
+        counting_lenience = 10
+        chunks = []
+        for n in sorted_unique_frames[1:]:
+            if n - end <= counting_lenience:
+                end = n
+            else:
+                if start == end:
+                    chunks.append([start, start+1])
+                else:
+                    chunks.append([start, end])
+                start = end = n
+        chunks.append([start, end])
+
+        return chunks
+
+    def get_frame_range_for_frame(self, frame_idx):
+        for i, chunk in enumerate(self.output_frame_ranges):
+            if frame_idx < chunk[1] and frame_idx >= chunk[0]:
+                return chunk
+        return None # Ideally this should never happen, but I wrote this bit.
     
     def get_frame(self,idx):
         try:
@@ -145,6 +175,8 @@ class VideoHandlerMem(VideoHandler):
         self.frames_backtrack = 0
         self.frames_lookahead = int(max(1.0/self.frame_length_max,2))
 
+        print(self.output_frame_ranges)
+
     def set_min_cached_frames(self,mcf):
         # if a decayed frame is about to be used, we fetch the frame + this amount of frames around it
         # it's likely that the modulator will generally fetch similar frames
@@ -153,7 +185,7 @@ class VideoHandlerMem(VideoHandler):
         
         # This enforces that cached frame count cannot exceed decay time
         # i.e. if decay time is 500 frames, max cached frames will be 500
-        self.cache.decay /= self.frames_lookahead
+        # self.cache.decay /= self.frames_lookahead
 
     def __get_video_frames_mem(self,start_frame: int,end_frame: int):
         start_time = start_frame * self.frame_length
@@ -200,13 +232,22 @@ class VideoHandlerMem(VideoHandler):
         min_f = max(match_id-self.frames_backtrack,0)
         max_f = min(match_id+self.frames_lookahead,self.framecount)
 
-        min_f = grow_to_nondecayed(min_f,match_id)
-        max_f = grow_to_nondecayed(match_id,max_f)
+        chunk = self.get_frame_range_for_frame(match_id)
+        if chunk != None:
+            min_f = chunk[0]
+            max_f = chunk[1]
+            # print()
+            # print("CHUNK WORKED!!!! ", chunk, " ", match_id)
+        else:
+            # print()
+            # print("Chunk miss: ", match_id)
+            min_f = grow_to_nondecayed(min_f,match_id)
+            max_f = grow_to_nondecayed(match_id,max_f)
 
         decoded_frames = self.__get_video_frames_mem(min_f,max_f)
         
         new_frame_ids = range(min_f, max_f)
-        self.cache.clear(new_frame_ids)
+
         for idx in new_frame_ids:
             frame_slice = VideoHandlerMem.__get_frame_slice(decoded_frames,idx-min_f)
             self.cache.set_item(idx,frame_slice)

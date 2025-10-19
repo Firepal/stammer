@@ -32,7 +32,7 @@ INTERNAL_SAMPLERATE = 44100 # Hz
 
 
 # max number of frames stored in memory
-MEM_DECAY_MAX = 500
+MEM_DECAY_MAX = 800
 
 COMMON_AUDIO_EXTS = [
     "wav",
@@ -100,7 +100,7 @@ def get_framecount(path):
 
 def build_output_video(video_handler: VideoHandler, matcher):
     logging.info("building output video")
-    
+
     def tesselate_composite(match_row, basis_coefficients, i):
         tiles: List[Image.Image] = []
         bits: List[List[int]] = []
@@ -122,11 +122,11 @@ def build_output_video(video_handler: VideoHandler, matcher):
                 output_frame.paste(tb, (x0,y0))
                 if do_tile:
                     output_frame.paste(tb,(x0, y0 + tb.height))
-        
+
         img_bytes = io.BytesIO()
-        output_frame.save(img_bytes,format="PNG") 
+        output_frame.save(img_bytes,format="PNG")
         video_handler.write_frame(i, img_bytes)
-    
+
     video_frame_length = video_handler.frame_length
     audio_frame_length = matcher.frame_length
 
@@ -152,7 +152,7 @@ def build_output_video(video_handler: VideoHandler, matcher):
             match_row = best_matches[audio_frame_i]
             match_row = [int((i * audio_frame_length + time_past_start_of_audio_frame)/video_frame_length) for i in match_row]
             tesselate_composite(match_row, basis_coefficients[audio_frame_i], video_frame_i)
-    
+
     # signals VideoHandlerDisk to start encoding
     video_handler.complete()
 
@@ -197,7 +197,7 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
         carrier_is_video = not output_is_audio
 
         logging.info("Calculating video length")
-        
+
         carrier_framecount = float(get_framecount(carrier_path))
         video_frame_length = carrier_duration / carrier_framecount
         if custom_frame_length is None:
@@ -217,7 +217,6 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
                     'include_color_mode',
                     str(frames_dir / 'frame%06d.png')
             ],color_mode)
-            
 
             subprocess.run(call,check=True)
 
@@ -261,7 +260,7 @@ def process(carrier_path, modulator_path, output_path, custom_frame_length, matc
             handler.set_min_cached_frames(min_cached_frames)
         elif video_mode == "disk":
             handler = VideoHandlerDisk(carrier_path,output_path,TEMP_DIR,matcher,carrier_framecount,video_frame_length,color_mode)
-        
+
         build_output_video(handler, matcher)
     else:
         subprocess.run(
@@ -280,7 +279,7 @@ def main():
     # check required command line tools
     test_command(['ffmpeg', '-version'])
     test_command(['ffprobe', '-version'])
-    
+
     parser = ArgumentParser()
     parser.add_argument('carrier_path', type=Path, metavar='carrier_track', help='path to an audio or video file that frames will be taken from')
     parser.add_argument('modulator_path', type=Path, metavar='modulator_track', help='path to an audio or video file that will be reconstructed using the carrier track')

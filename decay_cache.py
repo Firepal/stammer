@@ -11,7 +11,7 @@ class DecayItem:
         self.timer = timer
 
 class DecayCache:
-    items: dict[DecayItem] = {}
+    items: dict[int, DecayItem] = {}
     decay: int = 100
 
     def __init__(self,size: int):
@@ -41,10 +41,6 @@ class DecayCache:
             if self.item_decayed(i):
                 self.decayed_items += 1
                 self.items[i] = DecayItem()
-        
-        # free decayed items from memory
-        gc.collect()
-    
 
     def clear(self,ids: list[int]):
         for item_id in ids:
