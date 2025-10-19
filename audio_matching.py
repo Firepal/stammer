@@ -88,26 +88,22 @@ class BasicAudioMatcher(AudioMatcher):
         return np.argmax(dot_products)
 
     def find_matches(self):
-        self.best_matches = []
-        inv_len = 1.0/len(self.modulator_bands)
-        for i in range(len(self.modulator_bands)):
-            self.best_matches.append(self.best_match(self.modulator_bands[i]))
-            self.print_progress(inv_len,i)
+        scores = np.dot(self.modulator_bands.astype(np.float32, copy=False),
+                        self.carrier_bands.T.astype(np.float32, copy=False))
+        self.best_matches = np.argmax(scores, axis=1)
 
     def get_rescaled_frame(self, carrier_frame, modulator_frame):
-        # Match RMS loudness of modulator frame
-        modulator_frame_amp = np.sqrt(np.sum(modulator_frame*modulator_frame))
-        carrier_frame_amp = np.sqrt(np.sum(carrier_frame*carrier_frame))
-        carrier_frame_amp = np.sqrt(np.sum(carrier_frame*carrier_frame))
-        if (carrier_frame_amp == 0):
-            return carrier_frame * 0
-        rescaled_frame = carrier_frame * (modulator_frame_amp / carrier_frame_amp)
-
-        # Don't allow clipping
-        if (max(abs(rescaled_frame))) > 1:
-            rescaled_frame /= max(abs(rescaled_frame))
-        return rescaled_frame
-
+        rms_modulator = np.linalg.norm(modulator_frame)
+        rms_carrier = np.linalg.norm(carrier_frame)
+        if rms_carrier == 0:
+            return np.zeros_like(carrier_frame)
+        gain = rms_modulator / rms_carrier
+        frame = carrier_frame * gain
+        # clipping
+        peak = np.abs(frame).max()
+        if peak > 1.0:
+            frame /= peak
+        return frame
 
     def build_output_audio(self):
         output_audio = np.zeros(self.modulator.shape, dtype=float)
@@ -199,31 +195,29 @@ class UniqueAudioMatcher(BasicAudioMatcher):
 
 class WeightedAudioMatcher(BasicAudioMatcher):
     def r_a(self, f):
+        f_sq = f**2
         return (12194**2 * f**4) / (
-            (f**2 + 20.6**2) * np.sqrt((f**2 + 107.7**2) * (f**2 + 737.9**2)) * (f**2 + 12194 ** 2)
+            (f_sq + 20.6**2) * np.sqrt((f_sq + 107.7**2) * (f_sq + 737.9**2)) * (f_sq + 12194 ** 2)
         )
     
     def a_weighting(self, f):
         return self.r_a(f) / self.r_a(1000)
 
     def make_normalized_bands(self, frames_input):
-        transforms = np.fft.rfft(frames_input)
-        spectra = abs(transforms[:, 1:])
+        spectra = np.abs(np.fft.rfft(frames_input)[:, 1:])
+        norm = np.linalg.norm(spectra, axis=1, keepdims=True)
+        np.clip(norm, 1e-8, None, out=norm)
 
-        vector_magnitudes = np.sqrt((spectra * spectra).sum(axis=1))
-        vector_magnitudes[vector_magnitudes==0]=1
-        normalized_bands = spectra / vector_magnitudes[:,None]
-    
-        return normalized_bands
+        return (spectra / norm).astype(np.float32, copy=False)
     
     def find_matches(self):
-        freqs = np.fft.rfftfreq(2 * self.samples_per_frame, 1. / self.samplerate)[1:]
-        weights = self.a_weighting(freqs)
-        self.best_matches = []
-        inv_len = 1.0/len(self.modulator_bands)
-        for i in range(len(self.modulator_bands)):
-            self.best_matches.append(self.best_match(self.modulator_bands[i], weights))
-            self.print_progress(inv_len,i)
+        freqs = np.fft.rfftfreq(2 * self.samples_per_frame,
+                                1.0 / self.samplerate)[1:]
+        w = self.a_weighting(freqs).astype(np.float32, copy=False)
+        weighted_carriers = self.carrier_bands.astype(np.float32) * w  # (n_frames, n_bins)
+        scores = np.dot(self.modulator_bands.astype(np.float32), weighted_carriers.T)
+
+        self.best_matches = np.argmax(scores, axis=1)
 
     def best_match(self, modulator_band, weights):
         dot_products = np.sum(weights * (self.carrier_bands * modulator_band), axis=1)
