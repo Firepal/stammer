@@ -1,5 +1,5 @@
 from pathlib import Path
-from frame_cache import LRUCache
+from frame_cache import LRUCacheBytes
 from audio_matching import AudioMatcher
 
 import subprocess
@@ -200,7 +200,7 @@ def substream_indices(stream: bytes, magic_header: bytes, magic_footer: bytes):
 class VideoHandlerMem(VideoHandler):
     def __init__(self, *args):
         super().__init__(*args)
-        self.cache = LRUCache()
+        self.cache = LRUCacheBytes()
         self.cache_hits = 0
 
         self.frames_lookahead = 2
@@ -261,7 +261,7 @@ class VideoHandlerMem(VideoHandler):
         
         indices = substream_indices(decoded_frames, PNG_HEADER, PNG_FOOTER)
 
-        for i, idx in enumerate(new_frame_idxs):
+        for i, idx in enumerate(reversed(new_frame_idxs)):
             start, end = indices[i]
 
             frame_slice = decoded_frames[start:end]
