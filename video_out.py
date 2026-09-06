@@ -65,7 +65,7 @@ def extract_frames_to_disk(frames_dir, carrier_path, used_frames, color_mode):
             'include_color_mode',
             '-vf', select_string,
             "-fps_mode", "passthrough",
-            str(frames_dir / 'temp%06d.png')
+            str(frames_dir / 'temp%06d.qoi')
         ],color_mode)
 
         print(f"Decoding chunk {chunk_index+1} of {len(frame_chunks)}", end='\r')
@@ -74,8 +74,8 @@ def extract_frames_to_disk(frames_dir, carrier_path, used_frames, color_mode):
 
         for i, frame_i in enumerate(frame_chunk):
             os.rename(
-                frames_dir / ('temp%06d.png' % (i + 1,)),
-                frames_dir / ('frame%06d.png' % (frame_i,))
+                frames_dir / ('temp%06d.qoi' % (i + 1,)),
+                frames_dir / ('frame%06d.qoi' % (frame_i,))
             )
 
     print()
@@ -183,8 +183,9 @@ class VideoHandlerDisk(VideoHandler):
     def preprocess_frames(self, frames_map: dict, frames_used: list):
         extract_frames_to_disk(self.frames_dir, self.carrier_path, frames_used, self.color_mode)
 
-PNG_MAGIC =  b"\x89PNG"
-JPG_MAGIC = int("ffd8ffe0",16).to_bytes(4,byteorder='big')
+PNG_MAGIC = b"\x89PNG"
+QOI_MAGIC = b"qoif"
+JPG_MAGIC = b"\xff\xd8\xff\xe0"
 
 # assumes the next magic header is the end of the current substream
 # so we don't need to scan for per-format footers
