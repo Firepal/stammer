@@ -17,6 +17,10 @@ class LRUCacheBytes:
             self.current_bytes -= len(old_item)
 
     def set_item(self, i: int, item: bytes):
+        if i in self.items:
+            # we expect it to not be different
+            # in our usecase, making this a fair assumption
+            return
         self.items[i] = item
         self.current_bytes += len(item)
 
