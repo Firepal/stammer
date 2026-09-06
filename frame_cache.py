@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 class LRUCache:
-    items: OrderedDict[int, DecayItem] = OrderedDict()
+    items: OrderedDict[int, bytes] = OrderedDict()
     max_bytes: int = 100 << 20
     current_bytes: int = 0
 

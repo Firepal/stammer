@@ -6,6 +6,7 @@ import subprocess
 import io
 import logging
 import re
+import os
 
 def apply_color_mode(ffmpeg_call,color_mode):
     color_strs = []

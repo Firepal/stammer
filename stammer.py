@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 from argparse import ArgumentParser
-from typing import List
+
 from scipy.io import wavfile
 from pathlib import Path
 import subprocess
 import io
-import os
+import re
 
 import tempfile
 import logging
@@ -14,7 +14,6 @@ import logging
 
 from audio_matching import BasicAudioMatcher, CombinedFrameAudioMatcher, UniqueAudioMatcher, WeightedAudioMatcher
 
-import video_out
 from video_out import VideoHandler, VideoHandlerDisk, VideoHandlerMem, VideoHandlerDummyCollector
 from video_builder import VideoBuilderBasic, VideoBuilderCombined
 
@@ -100,7 +99,7 @@ def get_duration(path):
         ).stdout
 
 def get_framecount(path):
-    return subprocess.run(
+    result = subprocess.run(
             [
                 'ffprobe',
                 '-v', 'error',
@@ -114,6 +113,8 @@ def get_framecount(path):
             check=True,
             text=True
         ).stdout
+    # Prevent the error "ValueError: could not convert string to float: '56\n\n56\n'"
+    return re.findall(r"\d+",result)[0]
 
 
 
