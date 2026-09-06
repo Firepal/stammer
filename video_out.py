@@ -183,19 +183,20 @@ class VideoHandlerDisk(VideoHandler):
     def preprocess_frames(self, frames_map: dict, frames_used: list):
         extract_frames_to_disk(self.frames_dir, self.carrier_path, frames_used, self.color_mode)
 
-PNG_HEADER = b"\x89PNG\r\n\x1a\n"
-PNG_FOOTER = b"IEND\xaeB\x60\x82"
-
+PNG_MAGIC =  b"\x89PNG"
 JPG_MAGIC = int("ffd8ffe0",16).to_bytes(4,byteorder='big')
 
-def substream_indices(stream: bytes, magic_header: bytes, magic_footer: bytes):
-    return [
-        (mh.start(), mf.end())
-        for mh, mf in zip(
-            re.finditer(re.escape(magic_header), stream),
-            re.finditer(re.escape(magic_footer), stream)
-        )
-    ]
+# assumes the next magic header is the end of the current substream
+# so we don't need to scan for per-format footers
+def substream_indices(stream: bytes, magic_header: bytes):
+    headers = [mh.start() for mh in re.finditer(re.escape(magic_header), stream)]
+    if len(headers) == 0:
+        return []
+
+    footers = headers[1:]
+    footers.append(len(stream))
+
+    return [(h, f) for h, f in zip(headers, footers)]
 
 class VideoHandlerMem(VideoHandler):
     def __init__(self, *args):
@@ -236,7 +237,7 @@ class VideoHandlerMem(VideoHandler):
         start_time = start_frame * self.frame_length
         call = apply_color_mode([
                 'ffmpeg',
-                '-loglevel', 'error',
+                '-v', 'error',
                 '-ss', str(start_time),
                 '-i', self.carrier_path,
                 '-c:v', 'png',
@@ -259,7 +260,7 @@ class VideoHandlerMem(VideoHandler):
         decoded_frames = self.__get_video_frames_mem(min_f,max_f)
         new_frame_idxs = range(min_f, max_f)
         
-        indices = substream_indices(decoded_frames, PNG_HEADER, PNG_FOOTER)
+        indices = substream_indices(decoded_frames, PNG_MAGIC)
 
         for i, idx in enumerate(reversed(new_frame_idxs)):
             start, end = indices[i]
