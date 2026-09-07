@@ -11,13 +11,61 @@ import fraction_bits
 from video_out import VideoHandler, VideoHandlerDummyCollector
 from audio_matching import AudioMatcher
 
+import subprocess
+
 MAX_BASIS_WIDTH = 6
 MAX_TESSELLATION_COUNT = 9
 
 class VideoBuilder:
-    def __init__(self, video_handler: VideoHandler, audio_matcher: AudioMatcher):
+    def __init__(self, video_handler: VideoHandler, audio_matcher: AudioMatcher, output_path: Path):
         self.video_handler = video_handler
         self.audio_matcher = audio_matcher
+        self.output_path = output_path
+        self.out_proc = self.create_output_proc()
+
+    def write_frame(self, idx: int, frame: io.BytesIO | None = None):
+        # VideoHandlerDummyCollector returns False
+        if not self.video_handler.write_frame(idx):
+            return
+
+        frame.seek(0)
+        self.out_proc.stdin.write(frame.read())
+
+    def close_encoder(self):
+        self.out_proc.communicate()
+        print()
+
+    def process(self):
+        raise NotImplementedError
+
+    # --- internal methods below
+
+    def get_output_cmd(self):
+        cmd = [
+            'ffmpeg',
+            '-v', 'quiet',
+            '-y',
+            '-framerate', str(1.0 / self.video_handler.frame_length),
+            '-f', 'image2pipe', '-i', 'pipe:',
+            '-i', str(self.video_handler.temp_dir / 'out.wav'),
+            '-c:a', 'aac',
+            '-c:v', 'libx264',
+            '-crf', '25',
+            '-pix_fmt', 'yuv420p',
+            '-shortest',
+            str(self.output_path)
+        ]
+
+        return cmd
+
+    def create_output_proc(self):
+        call = self.get_output_cmd()
+
+        return subprocess.Popen(
+            call,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL
+        )
 
 class VideoBuilderBasic(VideoBuilder):
     def basic_video_frame(
@@ -60,7 +108,7 @@ class VideoBuilderBasic(VideoBuilder):
             carrier_video_index = min(carrier_video_index, int(self.video_handler.framecount - 1))
 
             carrier_vframe_bytes = self.video_handler.get_frame(carrier_video_index)
-            self.video_handler.write_frame(video_frame_i, carrier_vframe_bytes)
+            self.write_frame(video_frame_i, carrier_vframe_bytes)
 
 class VideoBuilderCombined(VideoBuilder):
     def tesselate_composite(self, match_row, basis_coefficients, i):
@@ -119,4 +167,4 @@ class VideoBuilderCombined(VideoBuilder):
             match_row = [int((i * audio_frame_length + time_past_start_of_audio_frame)/video_frame_length) for i in match_row]
             
             computed_frame_bytes = self.tesselate_composite(match_row, basis_coefficients[audio_frame_i], video_frame_i)
-            self.video_handler.write_frame(video_frame_i, computed_frame_bytes)
+            self.write_frame(video_frame_i, computed_frame_bytes)

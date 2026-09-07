@@ -1,6 +1,5 @@
 from pathlib import Path
 from frame_cache import LRUCacheBytes
-from audio_matching import AudioMatcher
 
 import subprocess
 import io
@@ -81,17 +80,22 @@ def extract_frames_to_disk(frames_dir, carrier_path, used_frames, color_mode):
     print()
 
 class VideoHandler:
-    def __init__(self, carrier_path: Path, output_path: Path, temp_dir: Path, matcher: AudioMatcher, framecount: int, frame_length: float, color_mode):
-        self.matcher = matcher
-        self.output_frame_count = int(len(matcher.get_best_matches()) * matcher.frame_length / frame_length)
+    def __init__(self,
+            carrier_path: Path,
+            temp_dir: Path,
+            carrier_frame_length: float,
+            carrier_framecount: int,
+            output_framecount: int,
+            color_mode: string
+        ):
+        self.output_frame_count = output_framecount
 
         self.carrier_path = carrier_path
-        self.output_path = output_path
         self.temp_dir = temp_dir
         self.frames_dir = self.temp_dir / 'frames'
 
-        self.framecount = int(framecount)
-        self.frame_length = frame_length
+        self.framecount = int(carrier_framecount)
+        self.frame_length = carrier_frame_length
 
         self.color_mode = color_mode
 
@@ -99,21 +103,12 @@ class VideoHandler:
     
     def get_frame(self,idx):
         assert(idx < self.framecount)
-    
-    def write_frame(self, idx, frame: io.BytesIO):
-        if not hasattr(self, 'out_proc'):
-            self.out_proc = self.create_output_proc()
 
-        frame.seek(0)
-        self.out_proc.stdin.write(frame.read())
-
+    # returns True if frame should be encoded
+    def write_frame(self, idx: int):
         self.frames_written += 1
         self.print_progress()
-
-    def complete(self):
-        print(end="\n")
-
-        self.out_proc.communicate()
+        return True
 
     def preprocess_frames(self, frames_map: dict, frames_used: list):
         pass
@@ -143,33 +138,6 @@ class VideoHandler:
     
     def print_progress(self):
         print(self.progress_strings_separated(),end='      \r')
-
-    def get_output_cmd(self):
-        cmd = [
-            'ffmpeg',
-            '-v', 'quiet',
-            '-y',
-            '-framerate', str(1.0 / self.frame_length),
-            '-f', 'image2pipe', '-i', 'pipe:',
-            '-i', str(self.temp_dir / 'out.wav'),
-            '-c:a', 'aac',
-            '-c:v', 'libx264',
-            '-crf', '24',
-            '-pix_fmt', 'yuv420p',
-            '-shortest',
-            str(self.output_path)
-        ]
-
-        return cmd
-    
-    def create_output_proc(self):
-        call = self.get_output_cmd()
-
-        return subprocess.Popen(
-            call,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL
-        )
 
 class VideoHandlerDisk(VideoHandler):
     def __init__(self, *args):
@@ -281,11 +249,13 @@ class VideoHandlerDummyCollector(VideoHandler):
     def get_frame(self, idx: int):
         self._frames_used.add(idx)
 
-    def write_frame(self, idx: int, *args):
+    def _collect(self, idx: int):
         if len(self._frames_used) > 0:
             self.frames_total.update(self._frames_used)
 
             self.output_to_carrier[idx] = self._frames_used
             self._frames_used = set()
 
-    def complete(self): pass
+    def write_frame(self, idx: int):
+        self._collect(idx)
+        return False

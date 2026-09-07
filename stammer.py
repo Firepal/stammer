@@ -24,10 +24,6 @@ DEFAULT_FRAME_LENGTH = 1/25 # Seconds
 BAND_WIDTH = 1.2
 INTERNAL_SAMPLERATE = 44100 # Hz
 
-
-# max number of frames stored in memory
-MEM_MAX_FRAMES = 1000
-
 COMMON_AUDIO_EXTS = [
     "wav",
     "wv",
@@ -85,7 +81,7 @@ def file_type(path):
     ).stdout
 
 def get_duration(path):
-    return subprocess.run(
+    return float(subprocess.run(
             [
                 'ffprobe',
                 '-i', str(path),
@@ -96,7 +92,7 @@ def get_duration(path):
             capture_output=True,
             check=True,
             text=True
-        ).stdout
+        ).stdout)
 
 def get_framecount(path):
     result = subprocess.run(
@@ -114,9 +110,7 @@ def get_framecount(path):
             text=True
         ).stdout
     # Prevent the error "ValueError: could not convert string to float: '56\n\n56\n'"
-    return re.findall(r"\d+",result)[0]
-
-
+    return float(re.findall(r"\d+",result)[0])
 
 def is_audio_filename(name):
     _path = Path(name)
@@ -164,31 +158,11 @@ def collect_builder_frames(builder, video_handler_args):
 
     builder.video_handler = old_video_handler
 
-    return video_handler_dummy
+    frames_used = video_handler_dummy.frames_total
+    frames_map = video_handler_dummy.output_to_carrier
+    del video_handler_dummy
 
-def build_output_video(
-    video_handler: VideoHandler,
-    audio_matcher,
-    video_handler_args: tuple
-):
-    if type(audio_matcher) in (BasicAudioMatcher, UniqueAudioMatcher, WeightedAudioMatcher):
-        builder = VideoBuilderBasic(video_handler, audio_matcher)
-    elif type(audio_matcher) == CombinedFrameAudioMatcher:
-        builder = VideoBuilderCombined(video_handler, audio_matcher)
-
-    logging.info("precalculating required frames")
-    video_handler_collector = collect_builder_frames(builder, video_handler_args)
-
-    frames_used = video_handler_collector.frames_total
-    frames_map = video_handler_collector.output_to_carrier
-
-    video_handler.preprocess_frames(frames_map, frames_used)
-
-    logging.info("building output video")
-    builder.process()
-
-    # signals VideoHandler to close the encoder process
-    video_handler.complete()
+    return (frames_used, frames_map)
 
 def process(
     carrier_path, modulator_path, output_path,
@@ -199,6 +173,7 @@ def process(
         raise FileNotFoundError(f"Carrier file {carrier_path} not found.")
     if not modulator_path.is_file():
         raise FileNotFoundError(f"Modulator file {modulator_path} not found.")
+
     carrier_type = file_type(carrier_path)
     modulator_type = file_type(modulator_path)
     
@@ -210,22 +185,22 @@ def process(
         logging.error(f"Unrecognized file type: {carrier_path}. Should be audio or video")
         return
 
-    carrier_duration = float(get_duration(carrier_path))
-    modulator_duration = float(get_duration(modulator_path))
+    carrier_duration = get_duration(carrier_path)
+    modulator_duration = get_duration(modulator_path)
 
     carrier_is_video = 'video' in carrier_type
     output_is_video = carrier_is_video and not is_audio_filename(output_path)
 
-    if output_is_video:
-        logging.info("Calculating video length")
-        carrier_framecount = float(get_framecount(carrier_path))
-        video_frame_length = carrier_duration / carrier_framecount
-
     frame_length = DEFAULT_FRAME_LENGTH
+
     if custom_frame_length is not None:
         frame_length = float(custom_frame_length)
     elif output_is_video:
-        frame_length = video_frame_length
+        logging.info("Calculating video length")
+
+        carrier_framecount = get_framecount(carrier_path)
+        carrier_frame_length = carrier_duration / carrier_framecount
+        frame_length = carrier_frame_length
 
     frame_length = min(frame_length, carrier_duration / 3, modulator_duration / 3)
 
@@ -266,7 +241,16 @@ def process(
 
     # at this point it's guaranteed we're outputting a video
 
-    video_handler_args = (carrier_path,output_path,TEMP_DIR,audio_matcher,carrier_framecount,video_frame_length,color_mode)
+    output_framecount = int(len(audio_matcher.get_best_matches()) * audio_matcher.frame_length / carrier_frame_length)
+
+    video_handler_args = (
+        carrier_path,
+        TEMP_DIR,
+        carrier_frame_length,
+        carrier_framecount,
+        output_framecount,
+        color_mode
+    )
 
     if video_mode == "ram":
         video_handler = VideoHandlerMem(*video_handler_args)
@@ -275,7 +259,20 @@ def process(
     elif video_mode == "disk":
         video_handler = VideoHandlerDisk(*video_handler_args)
 
-    build_output_video(video_handler, audio_matcher, video_handler_args)
+    builder_args = (video_handler, audio_matcher, output_path)
+
+    if type(audio_matcher) in (BasicAudioMatcher, UniqueAudioMatcher, WeightedAudioMatcher):
+        builder = VideoBuilderBasic(*builder_args)
+    elif type(audio_matcher) == CombinedFrameAudioMatcher:
+        builder = VideoBuilderCombined(*builder_args)
+
+    logging.info("precalculating required frames")
+    frames_used, frames_map = collect_builder_frames(builder, video_handler_args)
+    video_handler.preprocess_frames(frames_map, frames_used)
+
+    logging.info("building output video")
+    builder.process()
+    builder.close_encoder()
 
 def main():
     logging.basicConfig(format='%(message)s', level=logging.INFO)
