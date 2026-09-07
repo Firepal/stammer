@@ -126,26 +126,21 @@ def is_audio_filename(name):
 
     return ext[1:] in COMMON_AUDIO_EXTS
 
-def get_audio_as_wav_bytes(path):
-    ff_out = bytearray(subprocess.check_output(
+def convert_audio_to_wav_mono(in_path, out_path):
+    subprocess.check_output(
         [
             'ffmpeg',
             '-hide_banner',
             '-loglevel', 'error',
-            '-i', str(path),
+            '-i', str(in_path),
             '-vn', '-map', '0:a:0',
             '-ac', '1',
             '-ar', str(INTERNAL_SAMPLERATE),
             '-c:a', 'pcm_s16le',
-            '-f', 'wav', '-'
+            '-f', 'wav',
+            str(out_path)
         ]
-    ))
-
-    # fix file size in header length
-    actual_data_len = len(ff_out)-44
-    ff_out[4:8] = (actual_data_len).to_bytes(4,byteorder="little")
-
-    return io.BytesIO(bytes(ff_out))
+    )
 
 def encode_audio(audio_path, output_path):
     subprocess.run(
@@ -206,10 +201,6 @@ def process(
         raise FileNotFoundError(f"Modulator file {modulator_path} not found.")
     carrier_type = file_type(carrier_path)
     modulator_type = file_type(modulator_path)
-    carrier_duration = float(get_duration(carrier_path))
-    modulator_duration = float(get_duration(modulator_path))
-
-    video_in_mem = (video_mode == "ram")
     
     if not (('video' in modulator_type) or ('audio' in modulator_type)):
         logging.error(f"Unrecognized modulator file type: {modulator_path}. Should be audio or video")
@@ -219,6 +210,9 @@ def process(
         logging.error(f"Unrecognized file type: {carrier_path}. Should be audio or video")
         return
 
+    carrier_duration = float(get_duration(carrier_path))
+    modulator_duration = float(get_duration(modulator_path))
+
     carrier_is_video = 'video' in carrier_type
     output_is_video = carrier_is_video and not is_audio_filename(output_path)
 
@@ -227,17 +221,23 @@ def process(
         carrier_framecount = float(get_framecount(carrier_path))
         video_frame_length = carrier_duration / carrier_framecount
 
+    frame_length = DEFAULT_FRAME_LENGTH
     if custom_frame_length is not None:
         frame_length = float(custom_frame_length)
     elif output_is_video:
         frame_length = video_frame_length
-    else:
-        frame_length = DEFAULT_FRAME_LENGTH
 
     frame_length = min(frame_length, carrier_duration / 3, modulator_duration / 3)
-    logging.info("reading audio")
-    _, carrier_audio = wavfile.read(get_audio_as_wav_bytes(carrier_path))
-    _, modulator_audio = wavfile.read(get_audio_as_wav_bytes(modulator_path))
+
+    carrier_audio_path = TEMP_DIR / "in_carrier.wav"
+    modulator_audio_path = TEMP_DIR / "in_modulator.wav"
+
+    logging.info("converting audio for processing")
+    convert_audio_to_wav_mono(carrier_path, carrier_audio_path)
+    convert_audio_to_wav_mono(modulator_path, modulator_audio_path)
+
+    carrier_audio = wavfile.read(carrier_audio_path, mmap = True)[1]
+    modulator_audio = wavfile.read(modulator_audio_path, mmap = True)[1]
 
     logging.info("analyzing audio")
 
@@ -252,10 +252,13 @@ def process(
         case "weighted":
             audio_matcher = WeightedAudioMatcher(*matcher_args)
 
-    logging.info("creating output audio")
-
     audio_path = TEMP_DIR / 'out.wav'
+
+    logging.info("creating output audio")
     audio_matcher.make_output_audio(audio_path)
+
+    # we won't need to recompute best_matches
+    audio_matcher.free_match_data()
 
     if not output_is_video:
         encode_audio(audio_path, output_path)
@@ -286,7 +289,6 @@ def main():
         global TEMP_DIR
         TEMP_DIR = Path(tempdir)
         process(**vars(args))
-
 
 if __name__ == '__main__':
     main()

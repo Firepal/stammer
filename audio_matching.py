@@ -73,6 +73,12 @@ class AudioMatcher:
 
         self.find_matches()
 
+    def free_match_data(self):
+        del self.carrier_frames
+        del self.modulator_frames
+        del self.carrier_bands
+        del self.modulator_bands
+
     def get_best_matches(self):
         return self.best_matches
 
@@ -159,7 +165,7 @@ class CombinedFrameAudioMatcher(AudioMatcher):
         for i in range(len(self.modulator_bands)):
             (basis, scalars) = self.best_match(self.modulator_bands[i])
             self.best_matches[i] = basis
-            self.basis_coefficients[i]= scalars
+            self.basis_coefficients[i] = scalars
 
     def get_carrier(self, k,c):
         composite_carrier = None
@@ -201,14 +207,15 @@ class UniqueAudioMatcher(BasicAudioMatcher):
 
 
 class WeightedAudioMatcher(BasicAudioMatcher):
-    def r_a(self, f):
+    def r_a(f):
         f_sq = f**2
         return (12194**2 * f**4) / (
             (f_sq + 20.6**2) * np.sqrt((f_sq + 107.7**2) * (f_sq + 737.9**2)) * (f_sq + 12194 ** 2)
         )
-    
+
+    r_a_thousand = r_a(1000)
     def a_weighting(self, f):
-        return self.r_a(f) / self.r_a(1000)
+        return WeightedAudioMatcher.r_a(f) / self.r_a_thousand
 
     def make_normalized_bands(self, frames_input):
         spectra = np.abs(_fft(frames_input)[:, 1:])
