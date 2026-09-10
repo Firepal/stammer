@@ -39,17 +39,13 @@ def get_parser():
     parser.add_argument('carrier_path', type=Path, metavar='carrier_track', help='path to an audio or video file that frames will be taken from')
     parser.add_argument('modulator_path', type=Path, metavar='modulator_track', help='path to an audio or video file that will be reconstructed using the carrier track')
     parser.add_argument('output_path', type=Path, metavar='output_file', help='path to file that will be written to; should have an audio or video file extension (such as .wav, .mp3, .mp4, etc.)')
-    parser.add_argument('--custom-frame-length', '-f', help='uses this number as frame length, in seconds. defaults to 0.04 seconds (1/25th of a second) for audio, or the real frame rate for video')
-    parser.add_argument('--video_mode', '-vm', choices=('disk', 'ram'), default='ram', help='How STAMMER will store video frames internally.\
+    parser.add_argument('-f', '--custom-frame-length', help='uses this number as frame length, in seconds. defaults to 0.04 seconds (1/25th of a second) for audio, or the real frame rate for video')
+    parser.add_argument('-vm', '--video_mode', choices=('disk', 'ram'), default='ram', help='How STAMMER will store video frames internally.\
                         disk: Copy frames to temp directory (cleaned after the program closes).\
                         ram: Decode frames into system memory as needed, deleting least recently used frames over time. Recommended for very large videos.')
-    parser.add_argument('--min_cached_frames', '-mcf', type=int, default=2, help='Only applies to "ram" video mode. Minimum number of frames STAMMER will decode when handling a cache miss.')
-    parser.add_argument('--cache_mibibytes', '-mb', type=int, default=400, help='Only applies to "ram" video mode. The memory cap, in mibibytes, for the video frame cache.')
-    parser.add_argument('--color_mode', '-c', choices=('8fast', '8full', 'full'), default='full', help='Bitdepth of internal video frames.\
-                        8fast: generates 8-bit PNGs with default palette, fast and low filesize but low-quality. \
-                        8full: generates 8-bit PNGs with a custom 256-color palette for each frame. slow but looks great. \
-                        full: generates 16-bit PNGs, default. fast and looks good, but high filesize.')
-    parser.add_argument('--matcher_mode', '-m', choices=('basic', 'combination', 'unique', 'weighted'), default='basic', help="""Which algorithm Stammer will use.
+    parser.add_argument('-mb', '--cache_mibibytes', type=int, default=400, help='Only applies to "ram" video mode. The memory cap, in mibibytes, for the video frame cache.')
+    parser.add_argument('-if', '--image_format', choices=('png','qoi'), default='qoi', help='Internal image format for frames.')
+    parser.add_argument('-m', '--matcher_mode', choices=('basic', 'combination', 'unique', 'weighted'), default='basic', help="""Which algorithm Stammer will use.
         basic: replace each frame in the modulator with the most similar frame in the carrier.
         combination: replace each frame in the modulator with a linear combination of several frames in the carrier, to more closely approximate it.
         unique: limit each carrier frame to only appear once. If the carrier is longer than the modulator, some carrier frames will not be played, if it is shorter than the modulator, the modulator will be trimmed to the length of the carrier.
@@ -166,8 +162,8 @@ def collect_builder_frames(builder, video_handler_args):
 
 def process(
     carrier_path, modulator_path, output_path,
-    custom_frame_length, matcher_mode, video_mode, color_mode,
-    min_cached_frames, cache_mibibytes
+    custom_frame_length, matcher_mode, video_mode,
+    image_format, cache_mibibytes
     ):
     if not carrier_path.is_file():
         raise FileNotFoundError(f"Carrier file {carrier_path} not found.")
@@ -249,13 +245,12 @@ def process(
         carrier_frame_length,
         carrier_framecount,
         output_framecount,
-        color_mode
+        image_format
     )
 
     if video_mode == "ram":
         video_handler = VideoHandlerMem(*video_handler_args)
         video_handler.cache.max_bytes = cache_mibibytes << 20
-        video_handler.set_min_cached_frames(min_cached_frames)
     elif video_mode == "disk":
         video_handler = VideoHandlerDisk(*video_handler_args)
 

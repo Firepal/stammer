@@ -107,7 +107,7 @@ class VideoBuilderBasic(VideoBuilder):
             )
             carrier_video_index = min(carrier_video_index, int(self.video_handler.framecount - 1))
 
-            carrier_vframe_bytes = self.video_handler.get_frame(carrier_video_index)
+            carrier_vframe_bytes = self.video_handler.get_frame(carrier_video_index, video_frame_i)
             self.write_frame(video_frame_i, carrier_vframe_bytes)
 
 class VideoBuilderCombined(VideoBuilder):
@@ -118,7 +118,7 @@ class VideoBuilderCombined(VideoBuilder):
         
         for k, coeff in used_coeffs:
             frame_num = min(match_row[k], self.video_handler.framecount - 1)
-            frame_bytes = self.video_handler.get_frame(frame_num)
+            frame_bytes = self.video_handler.get_frame(frame_num, i)
 
             if type(self.video_handler) is VideoHandlerDummyCollector:
                 continue
