@@ -40,7 +40,7 @@ def chunks_of_n(input_list: list[int], n: int):
 def extract_frames_to_disk(frames_dir, carrier_path, used_frames, image_format):
     # Batch in chunks to ensure reasonable command length
     chunk_len = 80
-    frame_chunks = chunks_of_n(used_frames, chunk_len)
+    frame_chunks = chunks_of_n(sorted(used_frames), chunk_len)
 
     logging.info("extracting required frames to disk:")
 
@@ -52,7 +52,7 @@ def extract_frames_to_disk(frames_dir, carrier_path, used_frames, image_format):
 
         call = [
             'ffmpeg',
-            '-v', 'quiet',
+            '-v', 'error',
             '-i', str(carrier_path),
             '-vf', select_string,
             "-fps_mode", "passthrough",
@@ -61,7 +61,11 @@ def extract_frames_to_disk(frames_dir, carrier_path, used_frames, image_format):
 
         print(f"Decoding chunk {chunk_index+1} of {len(frame_chunks)}", end='\r')
 
-        subprocess.run(call,check=True)
+        try:
+            subprocess.run(call,check=True, stdout=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            print(e.stdout)
+            quit()
 
         for i, frame_i in enumerate(frame_chunk):
             os.rename(
@@ -138,9 +142,10 @@ class VideoHandlerDisk(VideoHandler):
     def get_frame(self, carrier_idx, output_idx = None):
         super().get_frame(carrier_idx)
         
-        return open(self.frames_dir / f"frame{idx:06d}.png", 'rb')
+        return open(self.frames_dir / f"frame{carrier_idx:06d}.{self.image_format}", 'rb')
 
     def preprocess_frames(self, frames_map: dict, frames_used: list):
+        self.frames_dir.mkdir()
         extract_frames_to_disk(self.frames_dir, self.carrier_path, frames_used, self.image_format)
 
 
