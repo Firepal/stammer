@@ -24,6 +24,14 @@ class LRUCacheBytes:
         self.items[i] = item
         self.current_bytes += len(item)
 
+    def pop_at(self, i: int):
+        if not i in self.items: return None
+        old_item = self.items[i]
+        self.current_bytes -= len(old_item)
+
+        del self.items[i]
+        return old_item
+
     def get_item(self, i: int):
         if i in self.items:
             self.items.move_to_end(i)
