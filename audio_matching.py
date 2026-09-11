@@ -22,6 +22,8 @@ class AudioMatcher:
     def __init__(self, carrier, modulator, samplerate, frame_length, chunk_size=512):
         self.carrier = _to_float(carrier)
         self.modulator = _to_float(modulator)
+        assert(self.carrier.ndim == 1)
+        assert(self.modulator.ndim == 1)
         self.samplerate = samplerate
         self.frame_length = frame_length
         self.chunk_size = chunk_size
@@ -38,7 +40,6 @@ class AudioMatcher:
 
         self.make_best_matches()
 
-
     def _count_frames(self, audio):
         return max(0, (len(audio) // self.samples_per_frame) - 2)
 
@@ -46,10 +47,18 @@ class AudioMatcher:
         start = index * self.samples_per_frame
         end = start + self.samples_per_frame * 2
         a = audio[start:end]
-        if len(a) < self.samples_per_frame * 2:
-            pad = np.zeros(self.samples_per_frame * 2 - len(a), dtype=np.float32)
-            a = np.concatenate([a, pad])
-        return (self.window * a).astype(np.float32, copy=False)
+
+        # Broadcast the 1-D window across extra dims of `a`
+        win = self.window
+        if a.ndim > 1:
+            win = win.reshape(-1, *([1] * (a.ndim - 1)))
+
+        frame_len = self.samples_per_frame * 2
+        if len(a) < frame_len:
+            pad_shape = (frame_len - len(a),) + a.shape[1:]
+            a = np.concatenate([a, np.zeros(pad_shape, dtype=np.float32)])
+
+        return (win * a).astype(np.float32, copy=False)
 
     def make_frames_chunk(self, audio, start_idx, end_idx):
         num = end_idx - start_idx
@@ -73,7 +82,7 @@ class AudioMatcher:
 
         return np.add.reduceat(spectra, split_points, axis=1) / np.asarray(section_lengths, dtype=np.float32)
 
-    def make_normalized_bands_frames(self, frames):
+    def bands_normalized_frames(self, frames):
         transforms = _fft(frames)
         spectra = np.abs(transforms[:, 1:]).astype(np.float32, copy=False)
 
@@ -83,22 +92,22 @@ class AudioMatcher:
         np.clip(norm, 1e-8, None, out=norm)
         return (bands / norm)
 
-    def make_normalized_bands_chunk(self, audio, start_idx, end_idx):
+    def bands_normalized_chunk(self, audio, start_idx, end_idx):
         frames = self.make_frames_chunk(audio, start_idx, end_idx)
-        return self.make_normalized_bands_frames(frames)
+        return self.bands_normalized_frames(frames)
 
     def prepare_carrier_bands(self):
         if self.num_carrier_frames == 0:
             self.carrier_bands = np.empty((0, 0), dtype=np.float32)
             return
         first_end = min(self.chunk_size, self.num_carrier_frames)
-        first_bands = self.make_normalized_bands_chunk(self.carrier, 0, first_end)
+        first_bands = self.bands_normalized_chunk(self.carrier, 0, first_end)
         n_bands = first_bands.shape[1]
         self.carrier_bands = np.empty((self.num_carrier_frames, n_bands), dtype=np.float32)
         self.carrier_bands[:first_end] = first_bands
         for start in range(first_end, self.num_carrier_frames, self.chunk_size):
             end = min(start + self.chunk_size, self.num_carrier_frames)
-            self.carrier_bands[start:end] = self.make_normalized_bands_chunk(self.carrier, start, end)
+            self.carrier_bands[start:end] = self.bands_normalized_chunk(self.carrier, start, end)
 
     def make_best_matches(self):
         self.prepare_carrier_bands()
@@ -110,14 +119,20 @@ class AudioMatcher:
     def find_matches(self):
         raise NotImplementedError
 
-    def get_best_matches(self):
-        return self.best_matches
-
-    def build_output_audio(self):
+    def build_output_audio(self, carrier_audio):
         raise NotImplementedError
 
-    def make_output_audio(self, destination_path):
-        output_audio = self.build_output_audio()
+    def make_output_audio(self, _carrier_multichannel, destination_path):
+        carrier = self.carrier
+
+        channels = 1 if _carrier_multichannel.ndim == 1 else _carrier_multichannel.shape[1]
+        if channels != 1:
+            carrier = _to_float(_carrier_multichannel)
+            output_audio = np.zeros((len(self.modulator), channels), dtype=np.float32)
+        else:
+            output_audio = np.zeros(len(self.modulator), dtype=np.float32)
+
+        self.build_output_audio(output_audio, carrier, channels)
         wavfile.write(destination_path, self.samplerate, output_audio)
 
     def print_progress(self, _len, i):
@@ -125,45 +140,64 @@ class AudioMatcher:
 
 
 class BasicAudioMatcher(AudioMatcher):
-    def find_matches(self):
+    def basic_matching(self, c_bands_func, m_bands_func):
         self.best_matches = np.empty(self.num_modulator_frames, dtype=np.int32)
         for start in range(0, self.num_modulator_frames, self.chunk_size):
             end = min(start + self.chunk_size, self.num_modulator_frames)
-            mod_bands = self.make_normalized_bands_chunk(self.modulator, start, end)
+            mod_chunk = m_bands_func(start, end)
+
             best_scores = np.full(end - start, -np.inf, dtype=np.float32)
             best_indices = np.zeros(end - start, dtype=np.int32)
             for c_start in range(0, self.num_carrier_frames, self.chunk_size):
                 c_end = min(c_start + self.chunk_size, self.num_carrier_frames)
-                carrier_chunk = self.carrier_bands[c_start:c_end]
-                scores = mod_bands @ carrier_chunk.T
+                carrier_chunk = c_bands_func(c_start, c_end)
+
+                scores = mod_chunk @ carrier_chunk.T
                 max_scores = scores.max(axis=1)
                 max_idx = scores.argmax(axis=1)
                 better = max_scores > best_scores
                 best_scores[better] = max_scores[better]
                 best_indices[better] = c_start + max_idx[better]
             self.best_matches[start:end] = best_indices
+            self.print_progress(self.num_modulator_frames, (start*0.5) + (end*0.5))
 
-    def get_rescaled_frame(self, carrier_frame, modulator_frame):
+    def find_matches(self):
+        self.basic_matching(
+            lambda start, end: self.carrier_bands[start:end],
+            lambda start, end: self.bands_normalized_chunk(self.modulator, start, end)
+        )
+
+    def get_rescale_factor(self, carrier_frame, modulator_frame):
         rms_modulator = np.linalg.norm(modulator_frame)
         rms_carrier = np.linalg.norm(carrier_frame)
         if rms_carrier == 0:
             return np.zeros_like(carrier_frame)
         gain = rms_modulator / rms_carrier
+        scale = gain
+
         frame = carrier_frame * gain
         peak = np.abs(frame).max()
         if peak > 1.0:
-            frame /= peak
-        return frame
+            scale /= peak
+        return scale
 
-    def build_output_audio(self):
-        output_audio = np.zeros(len(self.modulator), dtype=np.float32)
+    def build_output_audio(self, output_audio, carrier, channels):
         for i in range(self.num_modulator_frames):
-            carrier_frame = self.get_frame(self.carrier, self.best_matches[i])
-            modulator_frame = self.get_frame(self.modulator, i)
+            carrier_frame_mono = self.get_frame(self.carrier, self.best_matches[i])
+            modulator_frame_mono = self.get_frame(self.modulator, i)
+
+            scale = self.get_rescale_factor(carrier_frame_mono, modulator_frame_mono)
+            if channels != 1:
+                scale = scale.reshape(-1, *([1] * (channels - 1)))
+
+                carrier_frame_multi = self.get_frame(carrier, self.best_matches[i])
+                output_frame = carrier_frame_multi
+            else:
+                output_frame = carrier_frame_mono
+
             start = i * self.samples_per_frame
             end = start + self.samples_per_frame * 2
-            output_audio[start:end] += self.get_rescaled_frame(carrier_frame, modulator_frame)
-        return output_audio
+            output_audio[start:end] += output_frame * scale
 
 
 class CombinedFrameAudioMatcher(AudioMatcher):
@@ -175,7 +209,9 @@ class CombinedFrameAudioMatcher(AudioMatcher):
         coeffs = []
         pre, post, delta = None, None, None
         basis_epsilon = 5e-16
-        while (delta is None or delta < 0) and ((not coeffs) or basis_epsilon < np.abs(coeffs[-1])) and ((not proj_indices) or len(proj_indices) == 1 or len(proj_indices) != self.MAX_BASIS_WIDTH):
+        while (delta is None or delta < 0) \
+        and ((not coeffs) or basis_epsilon < np.abs(coeffs[-1])) \
+        and ((not proj_indices) or len(proj_indices) != self.MAX_BASIS_WIDTH):
             dot_products = np.sum(self.carrier_bands * modulator_band, axis=1)
             max_idx = np.argmax(dot_products)
             proj_indices.append(max_idx)
@@ -202,7 +238,7 @@ class CombinedFrameAudioMatcher(AudioMatcher):
         self.best_matches = np.zeros((self.num_modulator_frames, self.MAX_BASIS_WIDTH), np.int32) - 1
         for start in range(0, self.num_modulator_frames, self.chunk_size):
             end = min(start + self.chunk_size, self.num_modulator_frames)
-            mod_bands = self.make_normalized_bands_chunk(self.modulator, start, end)
+            mod_bands = self.bands_normalized_chunk(self.modulator, start, end)
             for j in range(end - start):
                 i = start + j
                 basis, scalars = self.best_match(mod_bands[j])
@@ -210,32 +246,30 @@ class CombinedFrameAudioMatcher(AudioMatcher):
                 self.basis_coefficients[i] = scalars
             self.print_progress(self.num_modulator_frames, (start*0.5) + (end*0.5))
 
-    def get_carrier(self, k, c):
+    def get_carrier(self, carrier, k, c):
         composite_carrier = None
         for index, element in enumerate(c):
             if element == 0:
                 break
-            carrier_frame = self.get_frame(self.carrier, k[index])
+            carrier_frame = self.get_frame(carrier, k[index])
             if index == 0:
                 composite_carrier = carrier_frame * element
             else:
                 composite_carrier += carrier_frame * element
         return composite_carrier
 
-    def build_output_audio(self):
-        output_audio = np.zeros(len(self.modulator), dtype=np.float32)
-
+    def build_output_audio(self, output_audio, carrier, channels):
         for i in range(self.num_modulator_frames):
-            composed_frame = self.get_carrier(self.best_matches[i], self.basis_coefficients[i])
+            composed_frame = self.get_carrier(
+                carrier,
+                self.best_matches[i],
+                self.basis_coefficients[i]
+            )
             if composed_frame is not None:
                 start = i * self.samples_per_frame
                 end = start + self.samples_per_frame * 2
                 output_audio[start:end] += composed_frame
             self.print_progress(self.num_modulator_frames, i)
-        return output_audio
-
-    def get_basis_coefficients(self):
-        return self.basis_coefficients
 
 
 class UniqueAudioMatcher(BasicAudioMatcher):
@@ -247,7 +281,7 @@ class UniqueAudioMatcher(BasicAudioMatcher):
         cost_matrix = np.empty((self.num_modulator_frames, self.num_carrier_frames), dtype=np.float32)
         for start in range(0, self.num_modulator_frames, self.chunk_size):
             end = min(start + self.chunk_size, self.num_modulator_frames)
-            mod_bands = self.make_normalized_bands_chunk(self.modulator, start, end)
+            mod_bands = self.bands_normalized_chunk(self.modulator, start, end)
             for c_start in range(0, self.num_carrier_frames, self.chunk_size):
                 c_end = min(c_start + self.chunk_size, self.num_carrier_frames)
                 carrier_chunk = self.carrier_bands[c_start:c_end]
@@ -258,9 +292,8 @@ class UniqueAudioMatcher(BasicAudioMatcher):
 
 
 class WeightedAudioMatcher(BasicAudioMatcher):
-    def prepare_carrier_bands(self):
-        # Do not precompute all carrier bands; compute on the fly in find_matches.
-        self.carrier_bands = None
+    # we won't be using self.carrier_bands
+    def prepare_carrier_bands(self): pass
 
     def r_a(self, f):
         f_sq = f ** 2
@@ -271,33 +304,19 @@ class WeightedAudioMatcher(BasicAudioMatcher):
     def a_weighting(self, f):
         return self.r_a(f) / self.r_a(1000)
 
-    def _make_weighted_spectra_chunk(self, audio, start_idx, end_idx):
+    def _weighted_chunk(self, audio, start_idx, end_idx):
         frames = self.make_frames_chunk(audio, start_idx, end_idx)
         spectra = np.abs(_fft(frames)[:, 1:]).astype(np.float32, copy=False)
         norm = np.linalg.norm(spectra, axis=1, keepdims=True)
         np.clip(norm, 1e-8, None, out=norm)
-        return (spectra / norm) * self._a_weighting
+        return (spectra / norm) * self._a_weights
 
     def find_matches(self):
         freqs = np.fft.rfftfreq(2 * self.samples_per_frame, 1.0 / self.samplerate)[1:]
-        self._a_weighting = self.a_weighting(freqs).astype(np.float32, copy=False)
+        self._a_weights = self.a_weighting(freqs).astype(np.float32, copy=False)
 
-        self.best_matches = np.empty(self.num_modulator_frames, dtype=np.int32)
-        for start in range(0, self.num_modulator_frames, self.chunk_size):
-            end = min(start + self.chunk_size, self.num_modulator_frames)
-            mod_weighted = self._make_weighted_spectra_chunk(self.modulator, start, end)
-
-            best_scores = np.full(end - start, -np.inf, dtype=np.float32)
-            best_indices = np.zeros(end - start, dtype=np.int32)
-            for c_start in range(0, self.num_carrier_frames, self.chunk_size):
-                c_end = min(c_start + self.chunk_size, self.num_carrier_frames)
-                carrier_weighted = self._make_weighted_spectra_chunk(self.carrier, c_start, c_end)
-                scores = mod_weighted @ carrier_weighted.T
-                max_scores = scores.max(axis=1)
-                max_idx = scores.argmax(axis=1)
-                better = max_scores > best_scores
-                best_scores[better] = max_scores[better]
-                best_indices[better] = c_start + max_idx[better]
-
-            self.best_matches[start:end] = best_indices
-            self.print_progress(self.num_modulator_frames, (start*0.5) + (end*0.5))
+        self.basic_matching(
+            lambda start, end: self._weighted_chunk(self.carrier, start, end),
+            lambda start, end: self._weighted_chunk(self.modulator, start, end)
+        )
+        del self._a_weights

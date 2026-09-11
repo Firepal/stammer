@@ -50,7 +50,7 @@ def get_parser():
         combination: replace each frame in the modulator with a linear combination of several frames in the carrier, to more closely approximate it.
         unique: limit each carrier frame to only appear once. If the carrier is longer than the modulator, some carrier frames will not be played, if it is shorter than the modulator, the modulator will be trimmed to the length of the carrier.
         weighted: apply an A-weighting curve to the audio spectra, to try and make formants more similar.""")
-    
+
     return parser
 
 
@@ -116,21 +116,22 @@ def is_audio_filename(name):
 
     return ext[1:] in COMMON_AUDIO_EXTS
 
-def convert_audio_to_wav_mono(in_path, out_path):
-    subprocess.check_output(
-        [
-            'ffmpeg',
-            '-hide_banner',
-            '-loglevel', 'error',
-            '-i', str(in_path),
-            '-vn', '-map', '0:a:0',
-            '-ac', '1',
-            '-ar', str(INTERNAL_SAMPLERATE),
-            '-c:a', 'pcm_s16le',
-            '-f', 'wav',
-            str(out_path)
-        ]
-    )
+def convert_audio_to_wav(in_path, out_path, channels=None):
+    call = [
+        'ffmpeg',
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-i', str(in_path),
+        '-vn', '-map', '0:a:0',
+        '-ar', str(INTERNAL_SAMPLERATE),
+        '-c:a', 'pcm_s16le',
+        '-f', 'wav',
+        str(out_path)
+    ]
+    if channels is not None:
+        idx = call.index('-ar')
+        call[idx:idx] = ['-ac', str(channels)]
+    subprocess.check_output(call)
 
 def encode_audio(audio_path, output_path):
     subprocess.run(
@@ -172,7 +173,7 @@ def process(
 
     carrier_type = file_type(carrier_path)
     modulator_type = file_type(modulator_path)
-    
+
     if not (('video' in modulator_type) or ('audio' in modulator_type)):
         logging.error(f"Unrecognized modulator file type: {modulator_path}. Should be audio or video")
         return
@@ -203,19 +204,21 @@ def process(
 
     frame_length = min(frame_length, carrier_duration / 3, modulator_duration / 3)
 
-    carrier_audio_path = TEMP_DIR / "in_carrier.wav"
-    modulator_audio_path = TEMP_DIR / "in_modulator.wav"
 
     logging.info("converting audio for processing")
-    convert_audio_to_wav_mono(carrier_path, carrier_audio_path)
-    convert_audio_to_wav_mono(modulator_path, modulator_audio_path)
 
-    carrier_audio = wavfile.read(carrier_audio_path, mmap = True)[1]
-    modulator_audio = wavfile.read(modulator_audio_path, mmap = True)[1]
+    def make_audio(path_in, outname, channels=None):
+        path_out = TEMP_DIR / outname
+        convert_audio_to_wav(path_in, path_out, channels)
+
+        return wavfile.read(path_out, mmap = True)[1]
+
+    carrier_audio_mono = make_audio(carrier_path, "in_carrier_mono.wav", channels=1)
+    modulator_audio_mono = make_audio(modulator_path, "in_modulator_mono.wav", channels=1)
 
     logging.info("analyzing audio")
 
-    matcher_args = (carrier_audio, modulator_audio, INTERNAL_SAMPLERATE, frame_length)
+    matcher_args = (carrier_audio_mono, modulator_audio_mono, INTERNAL_SAMPLERATE, frame_length)
     match matcher_mode:
         case "basic":
             audio_matcher = BasicAudioMatcher(*matcher_args)
@@ -229,7 +232,8 @@ def process(
     audio_path = TEMP_DIR / 'out.wav'
 
     logging.info("creating output audio")
-    audio_matcher.make_output_audio(audio_path)
+    carrier_audio_full = make_audio(carrier_path, "in_carrier_full.wav")
+    audio_matcher.make_output_audio(carrier_audio_full, audio_path)
 
     # we won't need to recompute best_matches
     audio_matcher.free_match_data()
@@ -240,7 +244,7 @@ def process(
 
     # at this point it's guaranteed we're outputting a video
 
-    output_framecount = int(len(audio_matcher.get_best_matches()) * audio_matcher.frame_length / carrier_frame_length)
+    output_framecount = int(len(audio_matcher.best_matches) * audio_matcher.frame_length / carrier_frame_length)
 
     video_handler_args = (
         carrier_path,
