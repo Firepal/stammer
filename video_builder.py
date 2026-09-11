@@ -91,7 +91,7 @@ class VideoBuilderBasic(VideoBuilder):
         return carrier_video_frame
     
     def process(self):
-        best_matches = self.audio_matcher.get_best_matches()
+        best_matches = self.audio_matcher.best_matches
 
         video_frame_length = self.video_handler.frame_length
         audio_frame_length = self.audio_matcher.frame_length
@@ -156,8 +156,8 @@ class VideoBuilderCombined(VideoBuilder):
 
         self.output_frame_count = int(len(self.audio_matcher.best_matches) * audio_frame_length / video_frame_length)
         
-        best_matches = self.audio_matcher.get_best_matches()
-        basis_coefficients = self.audio_matcher.get_basis_coefficients()
+        best_matches = self.audio_matcher.best_matches
+        basis_coefficients = self.audio_matcher.basis_coefficients
 
         for video_frame_i in range(self.video_handler.output_frame_count):
             elapsed_time = video_frame_i * video_frame_length
