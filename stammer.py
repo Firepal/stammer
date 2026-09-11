@@ -187,15 +187,18 @@ def process(
     carrier_is_video = 'video' in carrier_type
     output_is_video = carrier_is_video and not is_audio_filename(output_path)
 
+    if output_is_video:
+        logging.info("Calculating video length")
+
+        carrier_framecount = get_framecount(carrier_path)
+        carrier_frame_length = carrier_duration / carrier_framecount
+        frame_length = carrier_frame_length
+
     frame_length = DEFAULT_FRAME_LENGTH
 
     if custom_frame_length is not None:
         frame_length = float(custom_frame_length)
     elif output_is_video:
-        logging.info("Calculating video length")
-
-        carrier_framecount = get_framecount(carrier_path)
-        carrier_frame_length = carrier_duration / carrier_framecount
         frame_length = carrier_frame_length
 
     frame_length = min(frame_length, carrier_duration / 3, modulator_duration / 3)
